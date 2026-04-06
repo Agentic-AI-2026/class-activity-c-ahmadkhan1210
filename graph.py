@@ -52,7 +52,17 @@ def build_react_graph(llm: Any, tools_map: dict[str, Any], max_steps: int = 8):
 		if not raw:
 			return parsed
 
-		fn_matches = re.findall(r"<function=([a-zA-Z0-9_]+)(\{.*?\})></function>", raw, flags=re.DOTALL)
+		# Handles variants such as:
+		# <function=search_web{"query":"..."}</function>
+		# <function=search_web>{"query":"..."}</function>
+		fn_patterns = [
+			r"<function=([a-zA-Z0-9_]+)(\{.*?\})</function>",
+			r"<function=([a-zA-Z0-9_]+)>\s*(\{.*?\})\s*</function>",
+		]
+		fn_matches: list[tuple[str, str]] = []
+		for pattern in fn_patterns:
+			fn_matches.extend(re.findall(pattern, raw, flags=re.DOTALL))
+
 		for name, args_blob in fn_matches:
 			if name not in tools_map:
 				continue
@@ -67,6 +77,21 @@ def build_react_graph(llm: Any, tools_map: dict[str, Any], max_steps: int = 8):
 
 		action_matches = re.findall(r"Action:\s*([a-zA-Z0-9_]+)\((\{.*?\})\)", raw, flags=re.DOTALL)
 		for name, args_blob in action_matches:
+			if name not in tools_map:
+				continue
+			try:
+				args = json.loads(args_blob)
+			except Exception:  # noqa: BLE001
+				args = {}
+			parsed.append({"id": f"parsed-{name}", "name": name, "args": args})
+
+		# Handles "Action: <function=tool{...}</function>" wrapper style.
+		action_fn_matches = re.findall(
+			r"Action:\s*<function=([a-zA-Z0-9_]+)(\{.*?\})</function>",
+			raw,
+			flags=re.DOTALL,
+		)
+		for name, args_blob in action_fn_matches:
 			if name not in tools_map:
 				continue
 			try:
